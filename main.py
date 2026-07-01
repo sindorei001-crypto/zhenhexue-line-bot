@@ -16,10 +16,32 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
-reminded_events: set = set()  # 記錄已提醒的 event ID，避免重複推播
+REMINDED_FILE = "/tmp/reminded_events.json"
+
+def load_reminded_events() -> set:
+    try:
+        with open(REMINDED_FILE, "r") as f:
+            data = json.load(f)
+            # 只保留今天的紀錄
+            today = datetime.now(TW).strftime("%Y-%m-%d")
+            return set(data.get(today, []))
+    except Exception:
+        return set()
+
+def save_reminded_events(events: set):
+    today = datetime.now(TW).strftime("%Y-%m-%d")
+    try:
+        with open(REMINDED_FILE, "w") as f:
+            json.dump({today: list(events)}, f)
+    except Exception:
+        pass
+
+reminded_events: set = load_reminded_events()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global reminded_events
+    reminded_events = load_reminded_events()
     scheduler.add_job(push_morning_briefing, CronTrigger(hour=7, minute=0, timezone="Asia/Taipei"))
     scheduler.add_job(check_upcoming_events, "interval", minutes=5)
     scheduler.add_job(clear_reminded_events, CronTrigger(hour=0, minute=0, timezone="Asia/Taipei"))
@@ -273,6 +295,7 @@ async def check_upcoming_events():
             if event_id in reminded_events:
                 continue
             reminded_events.add(event_id)
+            save_reminded_events(reminded_events)
 
             start_raw = ev["start"].get("dateTime", "")
             if not start_raw:
@@ -293,7 +316,9 @@ async def check_upcoming_events():
 
 def clear_reminded_events():
     """每天午夜清空已提醒紀錄"""
-    reminded_events.clear()
+    global reminded_events
+    reminded_events = set()
+    save_reminded_events(reminded_events)
     print("[REMINDER] cleared daily reminder cache")
 
 
