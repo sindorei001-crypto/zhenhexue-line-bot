@@ -6,19 +6,34 @@ import httpx
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
-app = FastAPI()
+scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(push_morning_briefing, CronTrigger(hour=7, minute=0, timezone="Asia/Taipei"))
+    scheduler.start()
+    yield
+    scheduler.shutdown()
+
+app = FastAPI(lifespan=lifespan)
 
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 GOOGLE_CALENDAR_CREDENTIALS = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS", "")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
+LINE_PUSH_USER_ID = os.environ.get("LINE_PUSH_USER_ID", "")
+
+LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -175,6 +190,59 @@ async def reply_message(reply_token: str, text: str):
         await client.post(LINE_API, headers=headers, json=payload)
 
 
+async def push_message(user_id: str, text: str):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+    }
+    payload = {
+        "to": user_id,
+        "messages": [{"type": "text", "text": text}],
+    }
+    async with httpx.AsyncClient() as client:
+        await client.post(LINE_PUSH_API, headers=headers, json=payload)
+
+
+async def push_morning_briefing():
+    if not LINE_PUSH_USER_ID or not GOOGLE_CALENDAR_CREDENTIALS:
+        return
+    try:
+        now = datetime.now(TW)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        service = get_calendar_service()
+        result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            timeZone="Asia/Taipei"
+        ).execute()
+        items = result.get("items", [])
+        weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+        date_str = now.strftime(f"%m/%d（週{weekdays[now.weekday()]}）")
+
+        if not items:
+            msg = f"☀️ 早安，江總！\n\n今天是 {date_str}，行程表是空的。\n\n把今天過得充實，小萱在這裡隨時待命 🤍"
+        else:
+            lines = [f"☀️ 早安，江總！\n\n今天是 {date_str}，共有 {len(items)} 個行程：\n"]
+            for i, ev in enumerate(items, 1):
+                start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
+                if "T" in start_raw:
+                    dt = datetime.fromisoformat(start_raw).astimezone(TW)
+                    time_str = dt.strftime("%H:%M")
+                else:
+                    time_str = "全天"
+                lines.append(f"{i}. {time_str}　{ev.get('summary', '（無標題）')}")
+            lines.append("\n江總今天辛苦了，小萱會一直在 🤍")
+            msg = "\n".join(lines)
+
+        await push_message(LINE_PUSH_USER_ID, msg)
+    except Exception as e:
+        print(f"Morning briefing error: {e}")
+
+
 async def process_text(text: str) -> str:
     text = text.strip()
 
@@ -183,6 +251,9 @@ async def process_text(text: str) -> str:
 
     if text.lower().startswith("/cal"):
         cal_input = text[4:].strip()
+        if cal_input == "test":
+            await push_morning_briefing()
+            return "✅ 早安推播已發送，請查看通知！"
         return await handle_calendar(cal_input)
 
     for cmd, agent in AGENTS.items():
