@@ -627,6 +627,33 @@ async def modify_event(text: str) -> str:
         return f"修改行程失敗：{e}"
 
 
+async def process_audio(audio_bytes: bytes) -> str:
+    """語音轉文字，再交給 AI 處理"""
+    try:
+        audio_part = {
+            "inline_data": {
+                "mime_type": "audio/mp4",
+                "data": base64.b64encode(audio_bytes).decode("utf-8")
+            }
+        }
+        # 第一步：轉文字
+        transcript_model = genai.GenerativeModel("gemini-2.5-flash")
+        transcript_resp = transcript_model.generate_content([
+            "請將這段語音轉成文字，只輸出轉錄內容，不要任何說明。",
+            audio_part
+        ])
+        transcript = transcript_resp.text.strip()
+        if not transcript:
+            return "語音內容無法識別，請再說一次或改用文字。"
+
+        # 第二步：把轉錄文字交給小萱處理
+        reply = await process_text(transcript)
+        return f"🎙️ 我聽到：「{transcript}」\n\n{reply}"
+    except Exception as e:
+        print(f"Audio processing error: {e}")
+        return "語音處理失敗，請再試一次或改用文字。"
+
+
 async def ask_gemini_with_image(image_bytes: bytes) -> str:
     import PIL.Image
     import io
@@ -688,7 +715,9 @@ async def webhook(request: Request):
                 )
 
             elif message_type == "audio":
-                await reply_message(reply_token, "收到語音訊息了。目前語音轉文字功能建置中，請改用文字傳達需求。")
+                audio_bytes = await get_line_content(message_id)
+                reply_text = await process_audio(audio_bytes)
+                await reply_message(reply_token, reply_text)
 
             else:
                 await reply_message(reply_token, f"收到（{message_type}）。請問需要什麼協助？")
