@@ -79,7 +79,7 @@ def load_location() -> dict:
 async def get_weather(lat: float, lng: float) -> dict:
     """用 wttr.in 查天氣，回傳溫度、天氣描述、降雨機率"""
     try:
-        url = f"https://wttr.in/{lat},{lng}?format=j1&lang=zh"
+        url = f"https://wttr.in/{lat},{lng}?format=j1&lang=zh-tw"
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(url)
             data = resp.json()
@@ -90,6 +90,7 @@ async def get_weather(lat: float, lng: float) -> dict:
         temp = current.get("temp_C", "?")
         # 優先取中文描述
         lang_zh = current.get("lang_zh", [])
+        print(f"[WEATHER] lang_zh={lang_zh} weatherDesc={current.get('weatherDesc','')}")
         if lang_zh:
             desc = lang_zh[0].get("value", "")
         else:
