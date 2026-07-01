@@ -146,6 +146,7 @@ HELP_TEXT = """🤖 熱血助理-小萱 指令清單
 /cal 本週 → 查本週行程
 /cal 明天下午三點跟王董開會 → 自然語言新增行程
 /cal 刪除 今天 會議名稱 → 刪除行程
+/cal 修改 今天晨會改到下午三點 → 修改行程
 
 🤖 呼叫團隊成員：
 /rex [今日狀況] → Rex 幕僚長 briefing
@@ -309,6 +310,9 @@ async def handle_calendar(text: str) -> str:
     if cmd.startswith("刪除") or cmd.startswith("取消"):
         return await delete_event(cmd[2:].strip())
 
+    if cmd.startswith("修改"):
+        return await modify_event(cmd[2:].strip())
+
     # 自然語言新增（含舊格式 /cal 新增 ...）
     query = cmd[2:].strip() if (cmd.startswith("新增") or cmd.startswith("加入")) else cmd
     return await add_event_nl(query)
@@ -430,6 +434,108 @@ async def delete_event(text: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"刪除失敗：{e}"
+
+
+NL_MODIFY_MODEL = genai.GenerativeModel(
+    model_name="gemini-2.5-flash",
+    system_instruction=f"""你是行程修改解析助手。今天是 {datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y/%m/%d')}。
+使用者會用自然語言描述要修改哪個行程、改成什麼。請解析出：
+- date: 行程在哪天 YYYY/MM/DD（今天/明天請換算）
+- keyword: 用來搜尋行程的關鍵字
+- new_title: 新標題（如果要改名，否則 null）
+- new_date: 新日期 YYYY/MM/DD（如果要改日期，否則 null）
+- new_time: 新時間 HH:MM（如果要改時間，否則 null）
+- new_duration: 新時長小時數（如果要改時長，否則 null）
+
+只回傳 JSON，不要任何說明。範例：
+{{"date":"2026/07/01","keyword":"晨會","new_title":null,"new_date":null,"new_time":"15:00","new_duration":null}}"""
+)
+
+
+async def modify_event(text: str) -> str:
+    """自然語言修改行程"""
+    try:
+        resp = NL_MODIFY_MODEL.generate_content(text)
+        raw = resp.text.strip().strip("```json").strip("```").strip()
+        parsed = json.loads(raw)
+
+        # 找行程
+        target_date = datetime.strptime(parsed["date"], "%Y/%m/%d").replace(tzinfo=TW)
+        start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        keyword = parsed.get("keyword", "")
+
+        service = get_calendar_service()
+        result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+        items = result.get("items", [])
+
+        if not items:
+            return f"找不到 {target_date.strftime('%m/%d')} 的行程。"
+
+        matched = [ev for ev in items if keyword in ev.get("summary", "")] if keyword else items
+        if not matched:
+            lines = [f"找不到包含「{keyword}」的行程，當天行程："]
+            for ev in items:
+                lines.append(f"• {ev.get('summary', '無標題')}")
+            return "\n".join(lines)
+        if len(matched) > 1:
+            lines = ["找到多筆符合行程，請更精確說明："]
+            for ev in matched:
+                lines.append(f"• {ev.get('summary', '無標題')}")
+            return "\n".join(lines)
+
+        ev = matched[0]
+        updates = {}
+
+        if parsed.get("new_title"):
+            updates["summary"] = parsed["new_title"]
+
+        # 處理時間修改
+        start_raw = ev["start"].get("dateTime", "")
+        if start_raw and (parsed.get("new_time") or parsed.get("new_date") or parsed.get("new_duration")):
+            dt_start = datetime.fromisoformat(start_raw).astimezone(TW)
+            dt_end = datetime.fromisoformat(ev["end"].get("dateTime", start_raw)).astimezone(TW)
+            duration = (dt_end - dt_start).seconds // 3600
+
+            if parsed.get("new_date"):
+                new_d = datetime.strptime(parsed["new_date"], "%Y/%m/%d")
+                dt_start = dt_start.replace(year=new_d.year, month=new_d.month, day=new_d.day)
+            if parsed.get("new_time"):
+                h, m = map(int, parsed["new_time"].split(":"))
+                dt_start = dt_start.replace(hour=h, minute=m, second=0)
+            if parsed.get("new_duration"):
+                duration = parsed["new_duration"]
+
+            dt_end = dt_start + timedelta(hours=duration)
+            updates["start"] = {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"}
+            updates["end"] = {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"}
+
+        if not updates:
+            return "沒有偵測到要修改的內容，請說明要改標題還是時間。"
+
+        service.events().patch(calendarId=GOOGLE_CALENDAR_ID, eventId=ev["id"], body=updates).execute()
+
+        title = updates.get("summary", ev.get("summary", ""))
+        if "start" in updates:
+            dt_start = datetime.fromisoformat(updates["start"]["dateTime"]).astimezone(TW)
+            time_info = dt_start.strftime("%m/%d %H:%M")
+        else:
+            start_raw = ev["start"].get("dateTime", "")
+            dt_start = datetime.fromisoformat(start_raw).astimezone(TW)
+            time_info = dt_start.strftime("%m/%d %H:%M")
+
+        return f"✅ 已修改行程：\n📌 {title}\n🕐 {time_info}"
+
+    except json.JSONDecodeError:
+        return "解析失敗，請重新描述。\n例如：/cal 修改 今天晨會改到下午三點"
+    except Exception as e:
+        return f"修改行程失敗：{e}"
 
 
 async def ask_gemini_with_image(image_bytes: bytes) -> str:
