@@ -281,7 +281,9 @@ async def check_upcoming_events():
             title = ev.get("summary", "（無標題）")
             time_str = dt_start.strftime("%H:%M")
 
-            msg = f"⏰ 行程提醒，江總！\n\n📌 {title}\n🕐 {time_str} 開始（30 分鐘後）\n\n準備好了嗎？小萱在為你加油 🤍"
+            location = ev.get("location", "")
+            loc_str = f"\n📍 {location}" if location else ""
+            msg = f"⏰ 行程提醒，江總！\n\n📌 {title}\n🕐 {time_str} 開始（30 分鐘後）{loc_str}\n\n準備好了嗎？小萱在為你加油 🤍"
             await push_message(LINE_PUSH_USER_ID, msg)
             print(f"[REMINDER] pushed for event: {title} at {time_str}")
 
@@ -329,9 +331,10 @@ NL_CALENDAR_MODEL = genai.GenerativeModel(
 - time: HH:MM 格式（24小時制）
 - duration: 小時數（預設1）
 - title: 行程標題
+- location: 地點（沒有則為 null）
 
 只回傳 JSON，不要任何說明。格式：
-{{"date":"2026/07/02","time":"14:00","duration":1,"title":"跟王董開會"}}
+{{"date":"2026/07/02","time":"14:00","duration":1,"title":"跟王董開會","location":"晶英酒店"}}
 
 如果無法解析，回傳：{{"error":"無法解析"}}"""
 )
@@ -388,7 +391,9 @@ async def list_events(start: datetime, end: datetime, label: str) -> str:
                 time_str = dt.strftime("%H:%M")
             else:
                 time_str = "全天"
-            lines.append(f"{i}. {time_str} {ev.get('summary', '（無標題）')}")
+            loc = ev.get("location", "")
+            loc_str = f"　📍{loc}" if loc else ""
+            lines.append(f"{i}. {time_str}　{ev.get('summary', '（無標題）')}{loc_str}")
         return "\n".join(lines)
     except Exception as e:
         return f"查詢行程失敗：{e}"
@@ -421,8 +426,12 @@ async def add_event_nl(text: str) -> str:
             "start": {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"},
             "end": {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"},
         }
+        location = parsed.get("location")
+        if location:
+            event["location"] = location
         service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
-        return f"✅ 已新增行程：\n📌 {title}\n🕐 {dt_start.strftime('%m/%d（%A）%H:%M')}，共 {duration} 小時"
+        loc_str = f"\n📍 {location}" if location else ""
+        return f"✅ 已新增行程：\n📌 {title}\n🕐 {dt_start.strftime('%m/%d（%A）%H:%M')}，共 {duration} 小時{loc_str}"
     except json.JSONDecodeError:
         return "解析失敗，請重新描述行程。"
     except ValueError:
@@ -488,15 +497,16 @@ NL_MODIFY_MODEL = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
     system_instruction=f"""你是行程修改解析助手。今天是 {datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y/%m/%d')}。
 使用者會用自然語言描述要修改哪個行程、改成什麼。請解析出：
-- date: 行程在哪天 YYYY/MM/DD（今天/明天請換算）
-- keyword: 用來搜尋行程的關鍵字
+- date: 行程在哪天 YYYY/MM/DD（今天/明天請換算，若未指定日期則用今天）
+- keyword: 用來搜尋行程的關鍵字（取行程名稱的核心詞）
 - new_title: 新標題（如果要改名，否則 null）
 - new_date: 新日期 YYYY/MM/DD（如果要改日期，否則 null）
 - new_time: 新時間 HH:MM（如果要改時間，否則 null）
 - new_duration: 新時長小時數（如果要改時長，否則 null）
+- new_location: 新地點（如果要改地點，否則 null）
 
 只回傳 JSON，不要任何說明。範例：
-{{"date":"2026/07/01","keyword":"晨會","new_title":null,"new_date":null,"new_time":"15:00","new_duration":null}}"""
+{{"date":"2026/07/01","keyword":"晨會","new_title":null,"new_date":null,"new_time":"15:00","new_duration":null,"new_location":null}}"""
 )
 
 
@@ -564,8 +574,11 @@ async def modify_event(text: str) -> str:
             updates["start"] = {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"}
             updates["end"] = {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"}
 
+        if parsed.get("new_location"):
+            updates["location"] = parsed["new_location"]
+
         if not updates:
-            return "沒有偵測到要修改的內容，請說明要改標題還是時間。"
+            return "沒有偵測到要修改的內容，請說明要改標題、時間或地點。\n例如：/cal 修改 明天下午茶 改地點 晶英酒店"
 
         service.events().patch(calendarId=GOOGLE_CALENDAR_ID, eventId=ev["id"], body=updates).execute()
 
@@ -578,7 +591,9 @@ async def modify_event(text: str) -> str:
             dt_start = datetime.fromisoformat(start_raw).astimezone(TW)
             time_info = dt_start.strftime("%m/%d %H:%M")
 
-        return f"✅ 已修改行程：\n📌 {title}\n🕐 {time_info}"
+        location = updates.get("location", ev.get("location", ""))
+        loc_str = f"\n📍 {location}" if location else ""
+        return f"✅ 已修改行程：\n📌 {title}\n🕐 {time_info}{loc_str}"
 
     except json.JSONDecodeError:
         return "解析失敗，請重新描述。\n例如：/cal 修改 今天晨會改到下午三點"
