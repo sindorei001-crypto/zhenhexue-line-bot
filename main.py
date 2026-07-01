@@ -317,31 +317,52 @@ REALTIME_KEYWORDS = [
 def needs_search(text: str) -> bool:
     return any(kw in text for kw in REALTIME_KEYWORDS)
 
-def get_search_model(memory_context: str = "") -> genai.GenerativeModel:
-    base = build_default_model(memory_context)
+def _build_xiaoxuan_instruction(memory_context: str = "") -> str:
+    base = """你是「小萱」，江江的專屬 AI 美女秘書。說話成熟、溫柔、知性，一律繁體中文。
+如果有搜尋結果，請整合成有條理的分析，結尾可以自然地問江江想往哪個方向深入。"""
+    if memory_context:
+        base += f"\n\n{memory_context}"
+    return base
+
+async def search_and_respond(query: str, memory_context: str = "") -> str:
+    instruction = _build_xiaoxuan_instruction(memory_context)
+    # 嘗試 Gemini 2.0+ google_search 工具
+    try:
+        search_tool = genai.protos.Tool(
+            google_search=genai.protos.GoogleSearch()
+        )
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            tools=[search_tool],
+            system_instruction=instruction
+        )
+        response = model.generate_content(query)
+        print("[SEARCH] google_search grounding OK")
+        return response.text
+    except Exception as e1:
+        print(f"[SEARCH] google_search failed: {e1}")
+
+    # Fallback：嘗試舊版 google_search_retrieval 工具
     try:
         search_tool = genai.protos.Tool(
             google_search_retrieval=genai.protos.GoogleSearchRetrieval()
         )
-        return genai.GenerativeModel(
+        model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
             tools=[search_tool],
-            system_instruction=base._system_instruction
+            system_instruction=instruction
         )
-    except Exception:
-        return base  # 如果 grounding 不支援，fallback 到一般模型
-
-async def search_and_respond(query: str, memory_context: str = "") -> str:
-    try:
-        model = get_search_model(memory_context)
         response = model.generate_content(query)
+        print("[SEARCH] google_search_retrieval grounding OK")
         return response.text
-    except Exception as e:
-        print(f"[SEARCH] error: {e}")
-        # fallback：用一般模型回答
-        model = build_default_model(memory_context)
-        response = model.generate_content(f"（注意：目前無法查詢即時資訊）{query}")
-        return response.text
+    except Exception as e2:
+        print(f"[SEARCH] google_search_retrieval failed: {e2}")
+
+    # 最終 fallback：一般模型（無即時資料）
+    print("[SEARCH] using fallback model (no grounding)")
+    model = build_default_model(memory_context)
+    response = model.generate_content(query)
+    return response.text
 
 MEMORY_EXTRACT_MODEL = None  # 延遲初始化
 
