@@ -402,6 +402,7 @@ async def list_events(start: datetime, end: datetime, label: str) -> str:
 async def add_event_nl(text: str) -> str:
     """用自然語言或固定格式新增行程"""
     try:
+        location = None
         # 先嘗試固定格式 YYYY/MM/DD HH:MM 標題
         parts = text.split(" ", 2)
         if len(parts) == 3 and "/" in parts[0] and ":" in parts[1]:
@@ -418,6 +419,7 @@ async def add_event_nl(text: str) -> str:
             dt_start = datetime.strptime(f"{parsed['date']} {parsed['time']}", "%Y/%m/%d %H:%M").replace(tzinfo=TW)
             title = parsed["title"]
             duration = parsed.get("duration", 1)
+            location = parsed.get("location")
 
         dt_end = dt_start + timedelta(hours=duration)
         service = get_calendar_service()
@@ -426,7 +428,6 @@ async def add_event_nl(text: str) -> str:
             "start": {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"},
             "end": {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"},
         }
-        location = parsed.get("location")
         if location:
             event["location"] = location
         service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
