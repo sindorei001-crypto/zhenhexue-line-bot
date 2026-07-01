@@ -394,6 +394,10 @@ async def webhook(request: Request):
         try:
             if message_type == "text":
                 user_text = message.get("text", "")
+                if user_text.strip() == "/myid":
+                    user_id = event.get("source", {}).get("userId", "找不到")
+                    await reply_message(reply_token, f"你的 LINE User ID：\n{user_id}")
+                    continue
                 reply_text = await process_text(user_text)
                 await reply_message(reply_token, reply_text)
 
