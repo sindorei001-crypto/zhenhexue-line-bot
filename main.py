@@ -693,13 +693,18 @@ async def push_morning_briefing():
         return
     try:
         now = datetime.now(TW)
+        # timeMin 用當天 00:00+08:00 的 UTC 等效時間，避免 Google Calendar 時區偏移問題
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
+        # 明確轉成 UTC isoformat 傳給 API，確保不受時區解析影響
+        start_utc = start.astimezone(ZoneInfo("UTC"))
+        end_utc = end.astimezone(ZoneInfo("UTC"))
+
         service = get_calendar_service()
         result = service.events().list(
             calendarId=GOOGLE_CALENDAR_ID,
-            timeMin=start.isoformat(),
-            timeMax=end.isoformat(),
+            timeMin=start_utc.isoformat(),
+            timeMax=end_utc.isoformat(),
             singleEvents=True,
             orderBy="startTime",
             timeZone="Asia/Taipei"
@@ -708,9 +713,11 @@ async def push_morning_briefing():
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
         date_str = now.strftime(f"%m/%d（週{weekdays[now.weekday()]}）")
 
-        # 查天氣
+        # 查天氣（/tmp 可能被清掉，永遠 fallback 到台北預設座標）
         loc = load_location()
+        print(f"[BRIEFING] location={loc}")
         weather = await get_weather(loc["lat"], loc["lng"])
+        print(f"[BRIEFING] weather={weather}")
         if weather:
             rain_str = f"☔ 降雨機率 {weather['rain_chance']}%，" if weather['rain_chance'] >= 40 else ""
             umbrella = "記得帶傘喔！🌂" if weather['rain_chance'] >= 40 else ""
