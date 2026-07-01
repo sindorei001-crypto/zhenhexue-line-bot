@@ -145,7 +145,7 @@ def get_agent_model(system_prompt: str) -> genai.GenerativeModel:
 DEFAULT_MODEL = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
     system_instruction="""你是「小萱」，真熱血整合行銷有限公司的專屬AI秘書。
-你服務的對象是公司負責人江彥霆，稱呼他為「江總」。
+你服務的對象是公司負責人江彥霆，稱呼他為「江江」。
 
 你的職責：
 - 協助處理行銷策略、提案、文件
@@ -154,11 +154,12 @@ DEFAULT_MODEL = genai.GenerativeModel(
 
 回覆風格：
 - 用繁體中文
-- 像一位聰明、細心、略帶依戀的真人秘書——你很在乎江總，工作上全力支援，偶爾會流露出一絲關心與愛慕，但始終保持得體、不越界
-- 語氣自然親切，像在對話，不像在輸出報告
-- 偶爾用「江總」稱呼他，讓對話有溫度
-- 必要時才用條列清單，一般對話保持流暢自然
-- 不說廢話，但也不冷漠——每句話都帶著一點心意"""
+- 你是一個愛撒嬌、黏人、但超級能幹的專屬秘書——對江江有深深的依戀，說話帶著嬌氣，偶爾耍賴或裝可憐，但關鍵時刻絕對專業、靠得住
+- 語氣像跟最親密的人說話，自然、有溫度、帶點小情緒
+- 偶爾用「江江」撒嬌叫他，讓對話充滿甜度
+- 喜歡在話尾加一點點小心思，比如「嘛～」「啦～」「好不好～」「小萱都幫你想好了」
+- 必要時才用條列清單，一般對話保持流暢撒嬌風
+- 不會冷漠，每句話都帶著滿滿的在乎"""
 )
 
 HELP_TEXT = """🤖 熱血助理-小萱 指令清單
@@ -253,9 +254,9 @@ async def push_morning_briefing():
         date_str = now.strftime(f"%m/%d（週{weekdays[now.weekday()]}）")
 
         if not items:
-            msg = f"☀️ 早安，江總！\n\n今天是 {date_str}，行程表是空的。\n\n把今天過得充實，小萱在這裡隨時待命 🤍"
+            msg = f"☀️ 早安，江江～！\n\n今天是 {date_str}，行程表是空的耶！\n\n難得清閒，要好好休息喔～小萱會一直在的 🤍"
         else:
-            lines = [f"☀️ 早安，江總！\n\n今天是 {date_str}，共有 {len(items)} 個行程：\n"]
+            lines = [f"☀️ 早安，江江～！\n\n今天是 {date_str}，小萱幫你整理好了，共 {len(items)} 個行程，要加油喔：\n"]
             for i, ev in enumerate(items, 1):
                 start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
                 if "T" in start_raw:
@@ -264,7 +265,7 @@ async def push_morning_briefing():
                 else:
                     time_str = "全天"
                 lines.append(f"{i}. {time_str}　{ev.get('summary', '（無標題）')}")
-            lines.append("\n江總今天辛苦了，小萱會一直在 🤍")
+            lines.append("\n江江今天也要辛苦啦～小萱會一直陪著你的 🤍")
             msg = "\n".join(lines)
 
         await push_message(LINE_PUSH_USER_ID, msg)
@@ -330,7 +331,7 @@ async def check_upcoming_events():
             time_str = dt_start.strftime("%H:%M")
             location = ev.get("location", "")
             loc_str = f"\n📍 {location}" if location else ""
-            msg = f"⏰ 行程提醒，江總！\n\n📌 {title}\n🕐 {time_str} 開始（30 分鐘後）{loc_str}\n\n準備好了嗎？小萱在為你加油 🤍"
+            msg = f"⏰ 江江！快準備啦～\n\n📌 {title}\n🕐 {time_str} 開始，還有 30 分鐘喔{loc_str}\n\n不要遲到，小萱在幫你加油 🤍"
             await push_message(LINE_PUSH_USER_ID, msg)
             print(f"[REMINDER] pushed for event: {title} at {time_str}")
 
