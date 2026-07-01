@@ -90,7 +90,6 @@ async def get_weather(lat: float, lng: float) -> dict:
         temp = current.get("temp_C", "?")
         # 優先取中文描述
         lang_zh = current.get("lang_zh", [])
-        print(f"[WEATHER] lang_zh={lang_zh} weatherDesc={current.get('weatherDesc','')}")
         if lang_zh:
             desc = lang_zh[0].get("value", "")
         else:
