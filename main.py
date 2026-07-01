@@ -88,7 +88,23 @@ async def get_weather(lat: float, lng: float) -> dict:
         hourly = today.get("hourly", [])
 
         temp = current.get("temp_C", "?")
-        desc = current.get("lang_zh", [{}])[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
+        # 優先取中文描述
+        lang_zh = current.get("lang_zh", [])
+        if lang_zh:
+            desc = lang_zh[0].get("value", "")
+        else:
+            # 英文對照中文
+            eng_desc = current.get("weatherDesc", [{}])[0].get("value", "")
+            desc_map = {
+                "Sunny": "晴天", "Clear": "晴朗", "Partly cloudy": "多雲時晴",
+                "Cloudy": "多雲", "Overcast": "陰天", "Mist": "薄霧",
+                "Fog": "霧", "Light rain": "小雨", "Moderate rain": "中雨",
+                "Heavy rain": "大雨", "Thundery outbreaks possible": "可能有雷陣雨",
+                "Patchy rain possible": "局部有雨", "Light drizzle": "毛毛雨",
+                "Blowing snow": "吹雪", "Blizzard": "暴風雪",
+                "Light snow": "小雪", "Heavy snow": "大雪",
+            }
+            desc = desc_map.get(eng_desc, eng_desc)
         # 取今天最高降雨機率
         rain_chances = [int(h.get("chanceofrain", 0)) for h in hourly]
         max_rain = max(rain_chances) if rain_chances else 0
