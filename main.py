@@ -126,7 +126,8 @@ HELP_TEXT = """🤖 熱血助理-小萱 指令清單
 /cal 今天 → 查今日行程
 /cal 明天 → 查明日行程
 /cal 本週 → 查本週行程
-/cal 新增 2026/07/01 14:00 會議名稱 → 新增行程
+/cal 明天下午三點跟王董開會 → 自然語言新增行程
+/cal 刪除 今天 會議名稱 → 刪除行程
 
 🤖 呼叫團隊成員：
 /rex [今日狀況] → Rex 幕僚長 briefing
@@ -194,34 +195,46 @@ async def process_text(text: str) -> str:
     return response.text
 
 
+NL_CALENDAR_MODEL = genai.GenerativeModel(
+    model_name="gemini-2.5-flash",
+    system_instruction=f"""你是行程解析助手。今天是 {datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y/%m/%d')}，星期{['一','二','三','四','五','六','日'][datetime.now(ZoneInfo('Asia/Taipei')).weekday()]}。
+使用者會用自然語言描述要新增的行程，你需要解析出：
+- date: YYYY/MM/DD 格式
+- time: HH:MM 格式（24小時制）
+- duration: 小時數（預設1）
+- title: 行程標題
+
+只回傳 JSON，不要任何說明。格式：
+{{"date":"2026/07/02","time":"14:00","duration":1,"title":"跟王董開會"}}
+
+如果無法解析，回傳：{{"error":"無法解析"}}"""
+)
+
+
 async def handle_calendar(text: str) -> str:
-    """處理 /cal 指令"""
     cmd = text.strip()
 
-    # /cal 今天 or /cal 查詢
     if cmd in ["今天", "今日", "查詢", ""]:
         now = datetime.now(TW)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        return await list_events(start, end, "今天")
+        return await list_events(start, start + timedelta(days=1), "今天")
 
     if cmd.startswith("明天") or cmd.startswith("明日"):
         now = datetime.now(TW)
         start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        return await list_events(start, end, "明天")
+        return await list_events(start, start + timedelta(days=1), "明天")
 
     if cmd.startswith("本週") or cmd.startswith("這週"):
         now = datetime.now(TW)
         start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=7)
-        return await list_events(start, end, "本週")
+        return await list_events(start, start + timedelta(days=7), "本週")
 
-    # /cal 新增 YYYY/MM/DD HH:MM 標題
-    if cmd.startswith("新增") or cmd.startswith("加入"):
-        return await add_event(cmd[2:].strip())
+    if cmd.startswith("刪除") or cmd.startswith("取消"):
+        return await delete_event(cmd[2:].strip())
 
-    return "📅 日曆指令：\n/cal 今天 → 查今日行程\n/cal 明天 → 查明日行程\n/cal 本週 → 查本週行程\n/cal 新增 2026/07/01 14:00 會議名稱 → 新增行程"
+    # 自然語言新增（含舊格式 /cal 新增 ...）
+    query = cmd[2:].strip() if (cmd.startswith("新增") or cmd.startswith("加入")) else cmd
+    return await add_event_nl(query)
 
 
 async def list_events(start: datetime, end: datetime, label: str) -> str:
@@ -239,40 +252,107 @@ async def list_events(start: datetime, end: datetime, label: str) -> str:
         if not items:
             return f"📅 {label}沒有行程。"
         lines = [f"📅 {label}行程（共 {len(items)} 項）：\n"]
-        for ev in items:
+        for i, ev in enumerate(items, 1):
             start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
             if "T" in start_raw:
                 dt = datetime.fromisoformat(start_raw).astimezone(TW)
                 time_str = dt.strftime("%H:%M")
             else:
                 time_str = "全天"
-            lines.append(f"• {time_str} {ev.get('summary', '（無標題）')}")
+            lines.append(f"{i}. {time_str} {ev.get('summary', '（無標題）')}")
         return "\n".join(lines)
     except Exception as e:
         return f"查詢行程失敗：{e}"
 
 
-async def add_event(text: str) -> str:
-    """解析 'YYYY/MM/DD HH:MM 標題' 並新增行程"""
+async def add_event_nl(text: str) -> str:
+    """用自然語言或固定格式新增行程"""
     try:
+        # 先嘗試固定格式 YYYY/MM/DD HH:MM 標題
         parts = text.split(" ", 2)
-        if len(parts) < 3:
-            return "格式錯誤。請用：/cal 新增 2026/07/01 14:00 會議名稱"
-        date_str, time_str, title = parts
-        dt_start = datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").replace(tzinfo=TW)
-        dt_end = dt_start + timedelta(hours=1)
+        if len(parts) == 3 and "/" in parts[0] and ":" in parts[1]:
+            date_str, time_str, title = parts
+            dt_start = datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").replace(tzinfo=TW)
+            duration = 1
+        else:
+            # 自然語言解析
+            resp = NL_CALENDAR_MODEL.generate_content(text)
+            raw = resp.text.strip().strip("```json").strip("```").strip()
+            parsed = json.loads(raw)
+            if "error" in parsed:
+                return f"無法理解行程內容，請試試：\n/cal 明天下午三點跟王董開會\n/cal 2026/07/02 15:00 跟王董開會"
+            dt_start = datetime.strptime(f"{parsed['date']} {parsed['time']}", "%Y/%m/%d %H:%M").replace(tzinfo=TW)
+            title = parsed["title"]
+            duration = parsed.get("duration", 1)
+
+        dt_end = dt_start + timedelta(hours=duration)
         service = get_calendar_service()
         event = {
             "summary": title,
             "start": {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"},
             "end": {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"},
         }
-        created = service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
-        return f"✅ 已新增行程：\n📌 {title}\n🕐 {dt_start.strftime('%m/%d %H:%M')}（1小時）"
+        service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
+        return f"✅ 已新增行程：\n📌 {title}\n🕐 {dt_start.strftime('%m/%d（%A）%H:%M')}，共 {duration} 小時"
+    except json.JSONDecodeError:
+        return "解析失敗，請重新描述行程。"
     except ValueError:
-        return "日期格式錯誤。請用：YYYY/MM/DD HH:MM\n例如：2026/07/01 14:00"
+        return "日期格式錯誤，請試試：/cal 明天下午兩點開會"
     except Exception as e:
         return f"新增行程失敗：{e}"
+
+
+async def delete_event(text: str) -> str:
+    """刪除行程：解析日期和關鍵字"""
+    try:
+        now = datetime.now(TW)
+        if "今天" in text or "今日" in text:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif "明天" in text or "明日" in text:
+            start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+
+        service = get_calendar_service()
+        result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+        items = result.get("items", [])
+        if not items:
+            return "找不到可刪除的行程。"
+
+        # 關鍵字比對
+        keyword = text.replace("今天", "").replace("明天", "").replace("今日", "").replace("明日", "").strip()
+        if keyword:
+            matched = [ev for ev in items if keyword in ev.get("summary", "")]
+            if not matched:
+                lines = ["找不到包含「{}」的行程，當天行程：".format(keyword)]
+                for ev in items:
+                    lines.append(f"• {ev.get('summary', '無標題')}")
+                return "\n".join(lines)
+            if len(matched) == 1:
+                service.events().delete(calendarId=GOOGLE_CALENDAR_ID, eventId=matched[0]["id"]).execute()
+                return f"✅ 已刪除：{matched[0].get('summary', '無標題')}"
+            lines = ["找到多筆符合行程，請更精確說明："]
+            for ev in matched:
+                lines.append(f"• {ev.get('summary', '無標題')}")
+            return "\n".join(lines)
+
+        if len(items) == 1:
+            service.events().delete(calendarId=GOOGLE_CALENDAR_ID, eventId=items[0]["id"]).execute()
+            return f"✅ 已刪除：{items[0].get('summary', '無標題')}"
+
+        lines = ["當天有多筆行程，請指定關鍵字：\n/cal 刪除 今天 會議名稱\n\n當天行程："]
+        for ev in items:
+            lines.append(f"• {ev.get('summary', '無標題')}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"刪除失敗：{e}"
 
 
 async def ask_gemini_with_image(image_bytes: bytes) -> str:
