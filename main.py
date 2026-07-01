@@ -200,7 +200,8 @@ async def push_message(user_id: str, text: str):
         "messages": [{"type": "text", "text": text}],
     }
     async with httpx.AsyncClient() as client:
-        await client.post(LINE_PUSH_API, headers=headers, json=payload)
+        resp = await client.post(LINE_PUSH_API, headers=headers, json=payload)
+        print(f"[PUSH] status={resp.status_code} body={resp.text}")
 
 
 async def push_morning_briefing():
