@@ -15,7 +15,7 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-2.0-flash",
     system_instruction="""你是「真熱血AI助理」，真熱血整合行銷有限公司的內部AI助手。
 你服務的對象是公司創辦人江彥霆。
 
