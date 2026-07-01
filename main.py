@@ -3,17 +3,34 @@ import hashlib
 import hmac
 import base64
 import httpx
+import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import google.generativeai as genai
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 app = FastAPI()
 
 LINE_CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GOOGLE_CALENDAR_CREDENTIALS = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS", "")
+GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 
 genai.configure(api_key=GEMINI_API_KEY)
+
+TW = ZoneInfo("Asia/Taipei")
+
+def get_calendar_service():
+    creds_dict = json.loads(GOOGLE_CALENDAR_CREDENTIALS)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/calendar"]
+    )
+    return build("calendar", "v3", credentials=creds)
 
 LINE_API = "https://api.line.me/v2/bot/message/reply"
 LINE_CONTENT_API = "https://api-data.line.me/v2/bot/message/{message_id}/content"
@@ -101,11 +118,17 @@ DEFAULT_MODEL = genai.GenerativeModel(
 - 必要時提供結構化清單"""
 )
 
-HELP_TEXT = """🤖 真熱血AI助理 指令清單
+HELP_TEXT = """🤖 熱血助理-小萱 指令清單
 
-直接傳訊息 → AI 助理回覆
+直接傳訊息 → 小萱 AI 回覆
 
-呼叫團隊成員：
+📅 日曆管理：
+/cal 今天 → 查今日行程
+/cal 明天 → 查明日行程
+/cal 本週 → 查本週行程
+/cal 新增 2026/07/01 14:00 會議名稱 → 新增行程
+
+🤖 呼叫團隊成員：
 /rex [今日狀況] → Rex 幕僚長 briefing
 /kai [任務描述] → Kai 拆解任務清單
 /vera [財務問題] → Vera 財務分析
@@ -154,6 +177,10 @@ async def process_text(text: str) -> str:
     if text.lower() == "/help":
         return HELP_TEXT
 
+    if text.lower().startswith("/cal"):
+        cal_input = text[4:].strip()
+        return await handle_calendar(cal_input)
+
     for cmd, agent in AGENTS.items():
         if text.lower().startswith(f"/{cmd}"):
             user_input = text[len(cmd)+1:].strip()
@@ -165,6 +192,87 @@ async def process_text(text: str) -> str:
 
     response = DEFAULT_MODEL.generate_content(text)
     return response.text
+
+
+async def handle_calendar(text: str) -> str:
+    """處理 /cal 指令"""
+    cmd = text.strip()
+
+    # /cal 今天 or /cal 查詢
+    if cmd in ["今天", "今日", "查詢", ""]:
+        now = datetime.now(TW)
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return await list_events(start, end, "今天")
+
+    if cmd.startswith("明天") or cmd.startswith("明日"):
+        now = datetime.now(TW)
+        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return await list_events(start, end, "明天")
+
+    if cmd.startswith("本週") or cmd.startswith("這週"):
+        now = datetime.now(TW)
+        start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=7)
+        return await list_events(start, end, "本週")
+
+    # /cal 新增 YYYY/MM/DD HH:MM 標題
+    if cmd.startswith("新增") or cmd.startswith("加入"):
+        return await add_event(cmd[2:].strip())
+
+    return "📅 日曆指令：\n/cal 今天 → 查今日行程\n/cal 明天 → 查明日行程\n/cal 本週 → 查本週行程\n/cal 新增 2026/07/01 14:00 會議名稱 → 新增行程"
+
+
+async def list_events(start: datetime, end: datetime, label: str) -> str:
+    try:
+        service = get_calendar_service()
+        result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+            timeZone="Asia/Taipei"
+        ).execute()
+        items = result.get("items", [])
+        if not items:
+            return f"📅 {label}沒有行程。"
+        lines = [f"📅 {label}行程（共 {len(items)} 項）：\n"]
+        for ev in items:
+            start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
+            if "T" in start_raw:
+                dt = datetime.fromisoformat(start_raw).astimezone(TW)
+                time_str = dt.strftime("%H:%M")
+            else:
+                time_str = "全天"
+            lines.append(f"• {time_str} {ev.get('summary', '（無標題）')}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查詢行程失敗：{e}"
+
+
+async def add_event(text: str) -> str:
+    """解析 'YYYY/MM/DD HH:MM 標題' 並新增行程"""
+    try:
+        parts = text.split(" ", 2)
+        if len(parts) < 3:
+            return "格式錯誤。請用：/cal 新增 2026/07/01 14:00 會議名稱"
+        date_str, time_str, title = parts
+        dt_start = datetime.strptime(f"{date_str} {time_str}", "%Y/%m/%d %H:%M").replace(tzinfo=TW)
+        dt_end = dt_start + timedelta(hours=1)
+        service = get_calendar_service()
+        event = {
+            "summary": title,
+            "start": {"dateTime": dt_start.isoformat(), "timeZone": "Asia/Taipei"},
+            "end": {"dateTime": dt_end.isoformat(), "timeZone": "Asia/Taipei"},
+        }
+        created = service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
+        return f"✅ 已新增行程：\n📌 {title}\n🕐 {dt_start.strftime('%m/%d %H:%M')}（1小時）"
+    except ValueError:
+        return "日期格式錯誤。請用：YYYY/MM/DD HH:MM\n例如：2026/07/01 14:00"
+    except Exception as e:
+        return f"新增行程失敗：{e}"
 
 
 async def ask_gemini_with_image(image_bytes: bytes) -> str:
