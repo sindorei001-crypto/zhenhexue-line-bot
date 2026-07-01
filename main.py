@@ -205,7 +205,9 @@ async def push_message(user_id: str, text: str):
 
 
 async def push_morning_briefing():
+    print(f"[BRIEFING] triggered. USER_ID={LINE_PUSH_USER_ID!r} CAL_CREDS={'set' if GOOGLE_CALENDAR_CREDENTIALS else 'empty'}")
     if not LINE_PUSH_USER_ID or not GOOGLE_CALENDAR_CREDENTIALS:
+        print("[BRIEFING] missing env vars, abort")
         return
     try:
         now = datetime.now(TW)
