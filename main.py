@@ -273,11 +273,12 @@ async def push_morning_briefing():
 
 
 async def check_upcoming_events():
-    """每 5 分鐘掃一次，找出 25-35 分鐘後開始的行程並推播提醒"""
+    """每 5 分鐘掃一次，找出剛好 30 分鐘後開始的行程推播提醒（用開始時間做去重）"""
     if not LINE_PUSH_USER_ID or not GOOGLE_CALENDAR_CREDENTIALS:
         return
     try:
         now = datetime.now(TW)
+        # 只抓 25-35 分鐘內的行程
         window_start = now + timedelta(minutes=25)
         window_end = now + timedelta(minutes=35)
 
@@ -291,19 +292,42 @@ async def check_upcoming_events():
         ).execute()
 
         for ev in result.get("items", []):
-            event_id = ev["id"]
-            if event_id in reminded_events:
-                continue
-            reminded_events.add(event_id)
-            save_reminded_events(reminded_events)
-
             start_raw = ev["start"].get("dateTime", "")
             if not start_raw:
                 continue
+
             dt_start = datetime.fromisoformat(start_raw).astimezone(TW)
+
+            # 用「行程ID + 日期」當 key，同一天同一行程只提醒一次
+            remind_key = f"{ev['id']}_{dt_start.strftime('%Y%m%d')}"
+            if remind_key in reminded_events:
+                continue
+
+            # 確認這個 5 分鐘週期是最接近 30 分鐘的那次
+            minutes_away = (dt_start - now).total_seconds() / 60
+            if not (25 <= minutes_away <= 35):
+                continue
+
+            # 檢查 Google Calendar 上有沒有標記過已提醒
+            props = ev.get("extendedProperties", {}).get("private", {})
+            if props.get("line_reminded") == "1":
+                reminded_events.add(remind_key)
+                continue
+
+            reminded_events.add(remind_key)
+
+            # 在 Google Calendar 標記已提醒，跨重啟也有效
+            try:
+                service.events().patch(
+                    calendarId=GOOGLE_CALENDAR_ID,
+                    eventId=ev["id"],
+                    body={"extendedProperties": {"private": {"line_reminded": "1"}}}
+                ).execute()
+            except Exception:
+                pass
+
             title = ev.get("summary", "（無標題）")
             time_str = dt_start.strftime("%H:%M")
-
             location = ev.get("location", "")
             loc_str = f"\n📍 {location}" if location else ""
             msg = f"⏰ 行程提醒，江總！\n\n📌 {title}\n🕐 {time_str} 開始（30 分鐘後）{loc_str}\n\n準備好了嗎？小萱在為你加油 🤍"
