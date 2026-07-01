@@ -16,10 +16,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 scheduler = AsyncIOScheduler(timezone="Asia/Taipei")
+reminded_events: set = set()  # 記錄已提醒的 event ID，避免重複推播
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(push_morning_briefing, CronTrigger(hour=7, minute=0, timezone="Asia/Taipei"))
+    scheduler.add_job(check_upcoming_events, "interval", minutes=5)
+    scheduler.add_job(clear_reminded_events, CronTrigger(hour=0, minute=0, timezone="Asia/Taipei"))
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -245,6 +248,51 @@ async def push_morning_briefing():
         await push_message(LINE_PUSH_USER_ID, msg)
     except Exception as e:
         print(f"Morning briefing error: {e}")
+
+
+async def check_upcoming_events():
+    """每 5 分鐘掃一次，找出 25-35 分鐘後開始的行程並推播提醒"""
+    if not LINE_PUSH_USER_ID or not GOOGLE_CALENDAR_CREDENTIALS:
+        return
+    try:
+        now = datetime.now(TW)
+        window_start = now + timedelta(minutes=25)
+        window_end = now + timedelta(minutes=35)
+
+        service = get_calendar_service()
+        result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=window_start.isoformat(),
+            timeMax=window_end.isoformat(),
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+
+        for ev in result.get("items", []):
+            event_id = ev["id"]
+            if event_id in reminded_events:
+                continue
+            reminded_events.add(event_id)
+
+            start_raw = ev["start"].get("dateTime", "")
+            if not start_raw:
+                continue
+            dt_start = datetime.fromisoformat(start_raw).astimezone(TW)
+            title = ev.get("summary", "（無標題）")
+            time_str = dt_start.strftime("%H:%M")
+
+            msg = f"⏰ 行程提醒，江總！\n\n📌 {title}\n🕐 {time_str} 開始（30 分鐘後）\n\n準備好了嗎？小萱在為你加油 🤍"
+            await push_message(LINE_PUSH_USER_ID, msg)
+            print(f"[REMINDER] pushed for event: {title} at {time_str}")
+
+    except Exception as e:
+        print(f"[REMINDER] error: {e}")
+
+
+def clear_reminded_events():
+    """每天午夜清空已提醒紀錄"""
+    reminded_events.clear()
+    print("[REMINDER] cleared daily reminder cache")
 
 
 async def process_text(text: str) -> str:
