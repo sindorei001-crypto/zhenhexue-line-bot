@@ -57,8 +57,54 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 GOOGLE_CALENDAR_CREDENTIALS = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS", "")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 LINE_PUSH_USER_ID = os.environ.get("LINE_PUSH_USER_ID", "")
+LOCATION_SECRET = os.environ.get("LOCATION_SECRET", "")
 
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
+LOCATION_FILE = "/tmp/user_location.json"
+
+def save_location(lat: float, lng: float):
+    try:
+        with open(LOCATION_FILE, "w") as f:
+            json.dump({"lat": lat, "lng": lng}, f)
+    except Exception:
+        pass
+
+def load_location() -> dict:
+    try:
+        with open(LOCATION_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {"lat": 25.0330, "lng": 121.5654}  # 預設台北市
+
+async def get_weather(lat: float, lng: float) -> dict:
+    """用 wttr.in 查天氣，回傳溫度、天氣描述、降雨機率"""
+    try:
+        url = f"https://wttr.in/{lat},{lng}?format=j1&lang=zh"
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+            data = resp.json()
+        current = data["current_condition"][0]
+        today = data["weather"][0]
+        hourly = today.get("hourly", [])
+
+        temp = current.get("temp_C", "?")
+        desc = current.get("lang_zh", [{}])[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
+        # 取今天最高降雨機率
+        rain_chances = [int(h.get("chanceofrain", 0)) for h in hourly]
+        max_rain = max(rain_chances) if rain_chances else 0
+        max_temp = today.get("maxtempC", "?")
+        min_temp = today.get("mintempC", "?")
+
+        return {
+            "temp": temp,
+            "desc": desc,
+            "max_temp": max_temp,
+            "min_temp": min_temp,
+            "rain_chance": max_rain,
+        }
+    except Exception as e:
+        print(f"[WEATHER] error: {e}")
+        return None
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -254,10 +300,20 @@ async def push_morning_briefing():
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
         date_str = now.strftime(f"%m/%d（週{weekdays[now.weekday()]}）")
 
-        if not items:
-            msg = f"☀️ 早安，江江～！\n\n今天是 {date_str}，行程表是空的耶！\n\n難得清閒，要好好休息喔～小萱會一直在的 🤍"
+        # 查天氣
+        loc = load_location()
+        weather = await get_weather(loc["lat"], loc["lng"])
+        if weather:
+            rain_str = f"☔ 降雨機率 {weather['rain_chance']}%，" if weather['rain_chance'] >= 40 else ""
+            umbrella = "記得帶傘喔！🌂" if weather['rain_chance'] >= 40 else ""
+            weather_line = f"\n🌡️ 今日天氣：{weather['desc']}，{weather['min_temp']}°C－{weather['max_temp']}°C\n{rain_str}{umbrella}"
         else:
-            lines = [f"☀️ 早安，江江～！\n\n今天是 {date_str}，小萱幫你整理好了，共 {len(items)} 個行程，要加油喔：\n"]
+            weather_line = ""
+
+        if not items:
+            msg = f"☀️ 早安，江江～！\n\n今天是 {date_str}{weather_line}\n\n行程表是空的耶！難得清閒，要好好休息喔～小萱會一直在的 🤍"
+        else:
+            lines = [f"☀️ 早安，江江～！\n\n今天是 {date_str}{weather_line}\n\n小萱幫你整理好了，共 {len(items)} 個行程，要加油喔：\n"]
             for i, ev in enumerate(items, 1):
                 start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
                 if "T" in start_raw:
@@ -691,6 +747,19 @@ async def ask_gemini_with_image(image_bytes: bytes) -> str:
 @app.get("/")
 async def health():
     return {"status": "真熱血AI助理 online"}
+
+
+@app.post("/location")
+async def update_location(request: Request):
+    data = await request.json()
+    token = data.get("token", "")
+    if token != LOCATION_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    lat = float(data.get("lat"))
+    lng = float(data.get("lng"))
+    save_location(lat, lng)
+    print(f"[LOCATION] updated: {lat}, {lng}")
+    return {"status": "ok"}
 
 
 @app.post("/webhook")
