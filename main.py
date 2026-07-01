@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 import google.generativeai as genai
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -747,6 +747,135 @@ async def ask_gemini_with_image(image_bytes: bytes) -> str:
 @app.get("/")
 async def health():
     return {"status": "真熱血AI助理 online"}
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page():
+    return """<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>小萱位置設定</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; background: #0f0f0f; color: #fff; padding: 20px; }
+.header { text-align: center; padding: 30px 0 20px; }
+.header h1 { font-size: 24px; font-weight: 700; }
+.header p { color: #aaa; margin-top: 8px; font-size: 15px; }
+.step { background: #1c1c1e; border-radius: 16px; padding: 20px; margin: 16px 0; }
+.step-num { background: #ff3b6b; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; margin-bottom: 12px; }
+.step h2 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.step p { color: #aaa; font-size: 14px; line-height: 1.6; }
+.step .tag { display: inline-block; background: #2c2c2e; border-radius: 8px; padding: 4px 10px; font-size: 13px; color: #ff9f0a; margin: 4px 4px 4px 0; font-family: monospace; }
+.step .note { background: #2c2c2e; border-left: 3px solid #ff3b6b; border-radius: 8px; padding: 12px; margin-top: 12px; font-size: 13px; color: #ccc; line-height: 1.6; }
+.btn { display: block; background: #ff3b6b; color: white; text-align: center; padding: 16px; border-radius: 14px; font-size: 17px; font-weight: 600; text-decoration: none; margin: 20px 0; }
+.btn.secondary { background: #2c2c2e; color: #fff; }
+.divider { text-align: center; color: #555; margin: 8px 0; font-size: 13px; }
+.img-placeholder { background: #2c2c2e; border-radius: 12px; padding: 16px; text-align: center; color: #666; font-size: 13px; margin-top: 12px; }
+.success { background: #1c3a2c; border-radius: 16px; padding: 20px; margin: 16px 0; text-align: center; }
+.success h2 { color: #30d158; font-size: 20px; margin-bottom: 8px; }
+.success p { color: #aaa; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🌸 小萱位置設定</h1>
+  <p>設定完成後，每天早安推播<br>會自動帶入你的所在地天氣</p>
+</div>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <h2>打開「捷徑」App</h2>
+  <p>iPhone 內建，桌面搜尋「捷徑」即可找到。</p>
+  <div class="note">📱 如果找不到，去 App Store 搜尋「捷徑」免費下載</div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <h2>新增捷徑</h2>
+  <p>點右上角 <strong>「＋」</strong> → 點 <strong>「新增動作」</strong></p>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <h2>加入「取得目前位置」</h2>
+  <p>搜尋欄輸入：</p>
+  <span class="tag">取得目前位置</span>
+  <p style="margin-top:8px">找到後點擊加入。</p>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <h2>取得緯度</h2>
+  <p>再點「新增動作」，搜尋：</p>
+  <span class="tag">取得位置的詳細資訊</span>
+  <p style="margin-top:8px">加入後，點選預設選項改成 <strong>「緯度」</strong></p>
+</div>
+
+<div class="step">
+  <div class="step-num">5</div>
+  <h2>取得經度</h2>
+  <p>再加一個 <span class="tag">取得位置的詳細資訊</span></p>
+  <p style="margin-top:8px">這次改成 <strong>「經度」</strong></p>
+</div>
+
+<div class="step">
+  <div class="step-num">6</div>
+  <h2>傳送位置給小萱</h2>
+  <p>再加一個動作，搜尋：</p>
+  <span class="tag">取得 URL 的內容</span>
+  <div class="note">
+    設定如下：<br><br>
+    🔗 URL：<br>
+    <span style="color:#ff9f0a; font-size:12px; word-break:break-all;">https://zhenhexue-line-bot.onrender.com/location</span><br><br>
+    📋 方法：<strong>POST</strong><br>
+    📦 請求內文：<strong>JSON</strong><br><br>
+    新增 3 個欄位：<br>
+    <span class="tag">token</span> = <span class="tag">jiangjiang2026</span><br>
+    <span class="tag">lat</span> = 點魔法棒 → 選「緯度」<br>
+    <span class="tag">lng</span> = 點魔法棒 → 選「經度」
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">7</div>
+  <h2>命名並儲存</h2>
+  <p>點右上角選項，命名：</p>
+  <span class="tag">更新小萱位置</span>
+  <p style="margin-top:8px">然後點 <strong>「完成」</strong></p>
+</div>
+
+<div class="step">
+  <div class="step-num">8</div>
+  <h2>設定每天自動執行</h2>
+  <p>回到捷徑首頁 → 底部點 <strong>「自動化」</strong> → <strong>「＋」</strong></p>
+  <div class="note">
+    ① 選「時間」<br>
+    ② 設定 <strong>06:50</strong>，每天<br>
+    ③ 點「下一步」→ 選「執行捷徑」→「更新小萱位置」<br>
+    ④ 關閉「執行前詢問」<br>
+    ⑤ 點「完成」
+  </div>
+</div>
+
+<div class="success">
+  <h2>✅ 設定完成！</h2>
+  <p>明天早上 07:00 的推播<br>就會有你所在地的即時天氣了 🌤️</p>
+</div>
+
+<div class="divider">— 立即測試 —</div>
+
+<div class="step">
+  <h2>🧪 馬上測試看看</h2>
+  <p style="margin-top:8px">在捷徑 App 手動執行「更新小萱位置」一次，然後在 LINE 傳：</p>
+  <span class="tag">/cal test</span>
+  <p style="margin-top:8px">就能立刻看到帶天氣的早安推播！</p>
+</div>
+
+</body>
+</html>"""
 
 
 @app.post("/location")
