@@ -305,6 +305,44 @@ def format_memories_for_context() -> str:
         lines.append(f"- [{m['layer']}][{m['category']}] {m['content']}")
     return "\n".join(lines)
 
+# ── 網路搜尋 ─────────────────────────────────────────────────
+
+REALTIME_KEYWORDS = [
+    "最新", "現在", "最近", "今天", "這週", "本週",
+    "趨勢", "市場", "新聞", "報導", "股價", "匯率",
+    "搜尋", "查一下", "幫我查", "網路上", "有沒有",
+    "AI產業", "競爭對手", "產業動態", "政策", "法規"
+]
+
+def needs_search(text: str) -> bool:
+    return any(kw in text for kw in REALTIME_KEYWORDS)
+
+def get_search_model(memory_context: str = "") -> genai.GenerativeModel:
+    base = build_default_model(memory_context)
+    try:
+        search_tool = genai.protos.Tool(
+            google_search_retrieval=genai.protos.GoogleSearchRetrieval()
+        )
+        return genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            tools=[search_tool],
+            system_instruction=base._system_instruction
+        )
+    except Exception:
+        return base  # 如果 grounding 不支援，fallback 到一般模型
+
+async def search_and_respond(query: str, memory_context: str = "") -> str:
+    try:
+        model = get_search_model(memory_context)
+        response = model.generate_content(query)
+        return response.text
+    except Exception as e:
+        print(f"[SEARCH] error: {e}")
+        # fallback：用一般模型回答
+        model = build_default_model(memory_context)
+        response = model.generate_content(f"（注意：目前無法查詢即時資訊）{query}")
+        return response.text
+
 MEMORY_EXTRACT_MODEL = None  # 延遲初始化
 
 def get_memory_extract_model():
@@ -501,6 +539,10 @@ HELP_TEXT = """🤖 熱血助理-小萱 指令清單
 /記憶 → 查看小萱記住的所有事
 /記住 [內容] → 主動告訴小萱記住某件事
 /忘記 [關鍵字] → 刪除包含關鍵字的記憶
+
+🔍 即時搜尋：
+/搜尋 [關鍵字] → 查詢最新資訊、市場動態
+含「最新/趨勢/市場/新聞」等詞 → 自動啟用搜尋
 
 🤖 呼叫團隊成員：
 /rex [今日狀況] → Rex 幕僚長 briefing
@@ -736,8 +778,22 @@ async def process_text(text: str) -> str:
             response = m.generate_content(user_input)
             return f"── {agent['name']} ──\n\n{response.text}"
 
-    # 一般對話：注入記憶
+    # 搜尋指令或含即時資訊關鍵字
     memory_context = format_memories_for_context()
+    if text.startswith("/搜尋") or text.startswith("/搜索"):
+        query = text[3:].strip()
+        if not query:
+            return "要查什麼呢？請在 /搜尋 後面輸入關鍵字。"
+        reply = await search_and_respond(query, memory_context)
+        asyncio.create_task(extract_and_save_memories(text, reply))
+        return reply
+
+    if needs_search(text):
+        reply = await search_and_respond(text, memory_context)
+        asyncio.create_task(extract_and_save_memories(text, reply))
+        return reply
+
+    # 一般對話：注入記憶
     model = build_default_model(memory_context)
     response = model.generate_content(text)
     reply = response.text
