@@ -156,13 +156,22 @@ def get_google_creds(scopes: list):
     creds_dict = json.loads(GOOGLE_CALENDAR_CREDENTIALS)
     return service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
 
+_calendar_service = None
+_sheets_service = None
+
 def get_calendar_service():
-    creds = get_google_creds(["https://www.googleapis.com/auth/calendar"])
-    return build("calendar", "v3", credentials=creds)
+    global _calendar_service
+    if _calendar_service is None:
+        creds = get_google_creds(["https://www.googleapis.com/auth/calendar"])
+        _calendar_service = build("calendar", "v3", credentials=creds)
+    return _calendar_service
 
 def get_sheets_service():
-    creds = get_google_creds(["https://www.googleapis.com/auth/spreadsheets"])
-    return build("sheets", "v4", credentials=creds)
+    global _sheets_service
+    if _sheets_service is None:
+        creds = get_google_creds(["https://www.googleapis.com/auth/spreadsheets"])
+        _sheets_service = build("sheets", "v4", credentials=creds)
+    return _sheets_service
 
 # ── 長期記憶 ──────────────────────────────────────────────────
 
@@ -367,6 +376,7 @@ async def search_and_respond(query: str, memory_context: str = "") -> str:
 # ── 情緒感知 ─────────────────────────────────────────────────
 
 EMOTION_MODEL = None
+TRANSCRIPT_MODEL = None
 
 def get_emotion_model():
     global EMOTION_MODEL
@@ -378,6 +388,12 @@ def get_emotion_model():
 {"emotion":"壓力|疲憊|沮喪|興奮|開心|平靜","intensity":"高|中|低","note":"一句話說明"}"""
         )
     return EMOTION_MODEL
+
+def get_transcript_model():
+    global TRANSCRIPT_MODEL
+    if TRANSCRIPT_MODEL is None:
+        TRANSCRIPT_MODEL = genai.GenerativeModel("gemini-2.5-flash")
+    return TRANSCRIPT_MODEL
 
 async def detect_emotion(text: str) -> dict:
     try:
@@ -601,11 +617,15 @@ AGENTS = {
     },
 }
 
+_AGENT_MODEL_CACHE: dict = {}
+
 def get_agent_model(system_prompt: str) -> genai.GenerativeModel:
-    return genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=system_prompt
-    )
+    if system_prompt not in _AGENT_MODEL_CACHE:
+        _AGENT_MODEL_CACHE[system_prompt] = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            system_instruction=system_prompt
+        )
+    return _AGENT_MODEL_CACHE[system_prompt]
 
 
 HELP_TEXT = """🤖 熱血助理-小萱 指令清單
@@ -1194,8 +1214,7 @@ async def process_audio(audio_bytes: bytes) -> str:
             }
         }
         # 第一步：轉文字
-        transcript_model = genai.GenerativeModel("gemini-2.5-flash")
-        transcript_resp = transcript_model.generate_content([
+        transcript_resp = get_transcript_model().generate_content([
             "請將這段語音轉成文字，只輸出轉錄內容，不要任何說明。",
             audio_part
         ])
