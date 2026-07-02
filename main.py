@@ -1328,7 +1328,7 @@ body { font-family: -apple-system, sans-serif; background: #0f0f0f; color: #fff;
     📋 方法：<strong>POST</strong><br>
     📦 請求內文：<strong>JSON</strong><br><br>
     新增 3 個欄位：<br>
-    <span class="tag">token</span> = <span class="tag">jiangjiang2026</span><br>
+    <span class="tag">token</span> = <span class="tag">（填入你設定的 LOCATION_SECRET）</span><br>
     <span class="tag">lat</span> = 點魔法棒 → 選「緯度」<br>
     <span class="tag">lng</span> = 點魔法棒 → 選「經度」
   </div>

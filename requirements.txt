@@ -6,4 +6,4 @@ google-auth==2.29.0
 google-api-python-client==2.131.0
 apscheduler==3.10.4
 Pillow==10.4.0
-python-multipart==0.0.9
+python-multipart==0.0.20
